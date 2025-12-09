@@ -237,14 +237,20 @@ export const updateOrdenPicking = async (
         try {
           normalizedFecha = parseAndNormalizeToISO(fecha);
           const fechaActual = ot.fecha ? new Date(ot.fecha) : null;
-          if (fechaActual && new Date(normalizedFecha) < fechaActual) {
-            await client.query("ROLLBACK");
-            res.status(400).json({
-              success: false,
-              message:
-                "La nueva fecha no puede ser anterior a la fecha registrada",
-            });
-            return;
+          if (fechaActual) {
+            // Allow 1 day leeway to avoid timezone drift errors
+            const threshold = new Date(
+              fechaActual.getTime() - 24 * 60 * 60 * 1000
+            );
+            if (new Date(normalizedFecha) < threshold) {
+              await client.query("ROLLBACK");
+              res.status(400).json({
+                success: false,
+                message:
+                  "La nueva fecha no puede ser anterior a la fecha registrada",
+              });
+              return;
+            }
           }
         } catch (err) {
           await client.query("ROLLBACK");

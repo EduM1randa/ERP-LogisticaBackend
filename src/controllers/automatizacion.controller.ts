@@ -93,14 +93,12 @@ export const procesarPedidoAutomatico = async (
     // PASO 2: Seleccionar empleado_logistica desde public.empleado (balanceo por OT pendientes)
     // ==================================================================
     const empleadoCuentaQ = await client.query(`
-      SELECT e.id_empleado as id_empleado, e.nombre, e.apellido, e.email,
-        COUNT(op.id_ot) as ot_pendientes
+      SELECT e.id_empleado as id_empleado, e.nombre, e.apellido, e.email, ec.counter
       FROM public.empleado e
-      LEFT JOIN "Logistica".log_ot_picking op
-        ON e.id_empleado = op.id_empleado AND op.estado IN ('Pendiente', 'En proceso')
+      LEFT JOIN "Logistica".empleado_counters ec
+        ON ec.id_empleado = e.id_empleado AND ec.tipo = 'EMPLEADO_LOGISTICA'
       WHERE e.rol = 'EMPLEADO_LOGISTICA'
-      GROUP BY e.id_empleado, e.nombre, e.apellido, e.email
-      ORDER BY ot_pendientes ASC, e.id_empleado ASC
+      ORDER BY (ec.counter IS NOT NULL) ASC, COALESCE(ec.counter, 0) ASC, e.id_empleado ASC
       LIMIT 1
     `);
 
@@ -159,13 +157,12 @@ export const procesarPedidoAutomatico = async (
     // PASO 4: Seleccionar transportista con menos pedidos_asignados
     // ==================================================================
     const transportistaQ = await client.query(`
-      SELECT e.id_empleado as id_transportista, e.nombre, e.apellido, e.rut,
-        COUNT(gd.id_guia) as guias_activas
+      SELECT e.id_empleado as id_transportista, e.nombre, e.apellido, e.rut, ec.counter
       FROM public.empleado e
-      LEFT JOIN "Logistica".log_guia_despacho gd ON gd.id_transportista = e.id_empleado
+      LEFT JOIN "Logistica".empleado_counters ec
+        ON ec.id_empleado = e.id_empleado AND ec.tipo = 'TRANSPORTISTA'
       WHERE e.rol = 'TRANSPORTISTA'
-      GROUP BY e.id_empleado, e.nombre, e.apellido, e.rut
-      ORDER BY guias_activas ASC, e.id_empleado ASC
+      ORDER BY (ec.counter IS NOT NULL) ASC, COALESCE(ec.counter, 0) ASC, e.id_empleado ASC
       LIMIT 1
     `);
 
@@ -405,10 +402,16 @@ export const editarOt = async (req: Request, res: Response): Promise<void> => {
       if (payload.hasOwnProperty("fecha") && allowed.includes("fecha")) {
         const nuevaISO = parseAndNormalizeToISO(payload.fecha);
         const fechaActual = ot.fecha ? new Date(ot.fecha) : null;
-        if (fechaActual && new Date(nuevaISO) < fechaActual) {
-          throw new Error(
-            "La nueva fecha no puede ser anterior a la fecha registrada"
+        if (fechaActual) {
+          // Permitimos hasta 1 día de desfase en la validación para evitar problemas de zona horaria
+          const threshold = new Date(
+            fechaActual.getTime() - 24 * 60 * 60 * 1000
           );
+          if (new Date(nuevaISO) < threshold) {
+            throw new Error(
+              "La nueva fecha no puede ser anterior a la fecha registrada"
+            );
+          }
         }
         sets.push(`fecha = $${idx++}`);
         vals.push(nuevaISO);
